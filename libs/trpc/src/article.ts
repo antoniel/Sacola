@@ -4,6 +4,7 @@ import { Readability } from '@mozilla/readability';
 import axios from 'axios';
 import { JSDOM } from 'jsdom';
 import { TRPCError } from '@trpc/server';
+import { generateTitlePartialSearch } from './utils/search';
 
 export const articleRouter = createRouter()
   .query('getAll', {
@@ -57,18 +58,64 @@ export const articleRouter = createRouter()
       return article;
     },
   })
-  .query('getFilteredByName', {
+  .query('searchArticle', {
     input: z.object({
       name: z.string(),
+      isDeepSearch: z.boolean(),
     }),
     async resolve({ ctx, input }) {
-      return await ctx.prisma.article.findMany({
-        where: {
-          title: {
-            contains: input.name,
+      if (input.isDeepSearch) {
+        return await ctx.prisma.article.findMany({
+          include: { tags: true },
+          where: {
+            OR: [
+              {
+                title: {
+                  startsWith: input.name,
+                },
+              },
+              {
+                title: {
+                  contains: input.name,
+                },
+              },
+              {
+                AND: generateTitlePartialSearch(input.name),
+              },
+            ],
           },
-        },
-      });
+        });
+      } else {
+        const startWithQuery = await ctx.prisma.article.findMany({
+          include: { tags: true },
+          where: {
+            title: {
+              startsWith: input.name,
+            },
+          },
+        });
+
+        if (startWithQuery.length > 0) return startWithQuery;
+
+        const containsQuery = await ctx.prisma.article.findMany({
+          include: { tags: true },
+          where: {
+            title: {
+              contains: input.name,
+            },
+          },
+        });
+
+        if (containsQuery.length > 0) return containsQuery;
+
+        return await ctx.prisma.article.findMany({
+          include: { tags: true },
+          where: {
+            AND: generateTitlePartialSearch(input.name),
+            userId: ctx.session?.user?.id,
+          },
+        });
+      }
     },
   })
   .mutation('create', {
